@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Local IG Media Saver</title>
+<style>
+  :root { color-scheme: dark; --bg:#111; --card:#1b1b1b; --line:#2c2c2c; --fg:#eee; --mut:#999; --acc:#6ea8fe; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.mut, .mut { color: var(--mut); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; margin-top:18px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  input, textarea { width:100%; background:#0c0c0c; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:10px; font:13px ui-monospace, monospace; }
+  textarea { min-height: 140px; resize: vertical; }
+  button { background:var(--acc); color:#000; border:0; border-radius:6px; padding:8px 14px; font-weight:600; cursor:pointer; margin-top:10px; margin-right:6px; }
+  button.sec { background:#333; color:var(--fg); }
+  code, .out { word-break: break-all; }
+  .out { background:#0c0c0c; border:1px solid var(--line); border-radius:6px; padding:10px; font:12px ui-monospace, monospace; white-space:pre-wrap; margin-top:10px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(200px,1fr)); gap:12px; margin-top:12px; }
+  .item { background:#0c0c0c; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .item img, .item video { width:100%; display:block; aspect-ratio: 4/5; object-fit: cover; background:#000; }
+  .item .meta { padding:8px; font-size:12px; }
+  .item a { color: var(--acc); }
+  ol { padding-left: 20px; margin: 6px 0; }
+  .err { color:#ff7b7b; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Local IG Media Saver</h1>
+  <p class="mut">Runs entirely in this file. Nothing is sent anywhere except Instagram itself, from your own browser.</p>
+
+  <section>
+    <h2>1. Paste a link</h2>
+    <input id="link" placeholder="https://www.instagram.com/p/XXXX/  |  /reel/XXXX/  |  /stories/username/  |  /stories/highlights/1234/">
+    <button id="gen">Generate</button>
+    <div id="steps"></div>
+  </section>
+
+  <section>
+    <h2>2. Paste the JSON / HTML you got</h2>
+    <textarea id="paste" placeholder="Paste here..."></textarea>
+    <button id="parse">Extract media</button>
+    <button id="dlBest">Download all (best quality)</button>
+    <button class="sec" id="dlImages">Download all images</button>
+    <button class="sec" id="dlAll">Download everything</button>
+    <button class="sec" id="clear">Clear</button>
+    <div id="status" class="mut"></div>
+    <div id="merge"></div>
+    <div id="grid" class="grid"></div>
+  </section>
+</main>
+
+<script>
+const APP_ID = '936619743392459';
+const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function shortcodeToId(sc) {
+  let id = 0n;
+  for (const ch of sc.slice(0, 11)) id = id * 64n + BigInt(ALPHA.indexOf(ch));
+  return id.toString();
+}
+
+function parseLink(raw) {
+  let u;
+  try { u = new URL(raw.trim()); } catch { return null; }
+  const p = u.pathname.split('/').filter(Boolean);
+  if (['p', 'reel', 'reels', 'tv'].includes(p[0]) && p[1]) return { type: 'post', shortcode: p[1] };
+  if (p[0] === 'stories' && p[1] === 'highlights' && p[2]) return { type: 'highlight', id: p[2] };
+  if (p[0] === 'stories' && p[1]) return { type: 'stories', username: p[1] };
+  if (p.length >= 3 && p[1] === 'p') return { type: 'post', shortcode: p[2] };
+  return null;
+}
+
+function snippet(body) {
+  return `(async()=>{const h={'X-IG-App-ID':'${APP_ID}'};const g=async u=>{const r=await fetch(u,{headers:h,credentials:'include'});if(!r.ok)throw new Error(r.status+' '+u);return r.json()};try{${body}window.__ig=JSON.stringify(j);console.log('%cDone ('+window.__ig.length+' chars). Now type:  copy(__ig)  and press Enter, then paste into the tool.','color:lime;font-size:14px')}catch(e){console.error(e)}})();`;
+}
+
+function buildSteps(info) {
+  let url, code;
+  if (info.type === 'post') {
+    const mid = shortcodeToId(info.shortcode);
+    url = `https://www.instagram.com/p/${info.shortcode}/?__a=1&__d=dis`;
+    code = snippet(`const j=await g('https://www.instagram.com/api/v1/media/${mid}/info/');`);
+  } else if (info.type === 'highlight') {
+    url = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=highlight:${info.id}`;
+    code = snippet(`const j=await g('https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=highlight:${info.id}');`);
+  } else {
+    url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(info.username)}`;
+    code = snippet(`const p=await g('https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(info.username)}');const id=p.data.user.id;const j=await g('https://www.instagram.com/api/v1/feed/reels_media/?reel_ids='+id);`);
+  }
+  $('steps').innerHTML = `
+    <p><b>Option A (simple${info.type === 'post' ? '' : ', may fail for stories/highlights'}):</b> open this in the browser where you're logged in, select all (Ctrl+A), copy, paste below.</p>
+    <div class="out"><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(url)}</a></div>
+    <p style="margin-top:14px"><b>Option B (most reliable):</b></p>
+    <ol>
+      <li>Open <a href="https://www.instagram.com/" target="_blank" rel="noreferrer">instagram.com</a> (logged in), press F12 → Console.</li>
+      <li>Paste the code below and press Enter (Chrome may ask you to type <code>allow pasting</code> first). It only calls Instagram and copies the result to your clipboard. Read it if you like, it's short.</li>
+      <li>Paste the clipboard into step 2.</li>
+    </ol>
+    <div class="out" id="code">${esc(code)}</div>
+    <button class="sec" id="copyCode">Copy code</button>`;
+  $('copyCode').onclick = () => navigator.clipboard.writeText(code).then(() => $('copyCode').textContent = 'Copied');
+}
+
+$('gen').onclick = () => {
+  const info = parseLink($('link').value);
+  if (!info) { $('steps').innerHTML = '<p class="err">Could not recognise that link.</p>'; return; }
+  buildSteps(info);
+};
+
+function best(cands) {
+  return (cands || []).slice().sort((a, b) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0))[0];
+}
+
+function parseDash(xml) {
+  if (!xml) return null;
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const reps = [...doc.getElementsByTagName('Representation')].map(r => {
+    const set = r.parentElement;
+    const mime = r.getAttribute('mimeType') || set?.getAttribute('mimeType') || '';
+    const type = set?.getAttribute('contentType') || mime.split('/')[0];
+    const url = r.getElementsByTagName('BaseURL')[0]?.textContent.trim();
+    return { type, url, w: +r.getAttribute('width') || 0, h: +r.getAttribute('height') || 0, bw: +r.getAttribute('bandwidth') || 0 };
+  }).filter(r => r.url);
+  const top = t => reps.filter(r => r.type === t).sort((a, b) => b.w * b.h - a.w * a.h || b.bw - a.bw)[0];
+  const v = top('video');
+  return v ? { v, a: top('audio') } : null;
+}
+
+function collect(root) {
+  const out = [], seen = new Set();
+  const push = (key, m) => { if (m.url && !seen.has(key || m.url)) { seen.add(key || m.url); out.push(m); } };
+  const walk = (o, owner) => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach(x => walk(x, owner)); return; }
+    const user = o.user?.username || o.owner?.username || owner;
+    if (o.carousel_media) { o.carousel_media.forEach(x => walk(x, user)); }
+    else if (o.video_versions || o.image_versions2) {
+      const v = best(o.video_versions), i = best(o.image_versions2?.candidates);
+      push(o.id || o.pk, { video: !!v, url: (v || i)?.url, w: (v || i)?.width, h: (v || i)?.height, thumb: i?.url, user, taken: o.taken_at, id: o.id || o.pk, dash: v ? parseDash(o.video_dash_manifest) : null });
+    } else if (o.edge_sidecar_to_children) { walk(o.edge_sidecar_to_children, user); }
+    else if (o.display_url && (o.__typename || o.shortcode)) {
+      push(o.id, { video: !!o.is_video && !!o.video_url, url: o.video_url || o.display_url, thumb: o.display_url, user, taken: o.taken_at_timestamp, id: o.id });
+    }
+    for (const k in o) if (k !== 'carousel_media' && k !== 'edge_sidecar_to_children') walk(o[k], user);
+  };
+  walk(root);
+  return out;
+}
+
+function parseInput(text) {
+  text = text.trim();
+  try { return [JSON.parse(text)]; } catch {}
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+  const pre = doc.querySelector('pre');
+  if (pre) try { return [JSON.parse(pre.textContent)]; } catch {}
+  const blobs = [];
+  doc.querySelectorAll('script[type="application/json"], script[type="application/ld+json"]').forEach(s => { try { blobs.push(JSON.parse(s.textContent)); } catch {} });
+  return blobs;
+}
+
+function isBetter(m) {
+  const d = m.dash;
+  if (!d) return false;
+  if (d.v.w * d.v.h > (m.w || 0) * (m.h || 0)) return true;
+  return !m.w && d.v.bw > 0;
+}
+
+function render(items) {
+  const merges = [];
+  $('grid').innerHTML = items.map((m, n) => {
+    const base = `${m.user || 'ig'}_${m.id || n}`.replace(/[^\w-]/g, '_');
+    const name = `${base}.${m.video ? 'mp4' : 'jpg'}`;
+    const date = m.taken ? new Date(m.taken * 1000).toLocaleString() : '';
+    const res = m.w ? `${m.w}×${m.h}` : '';
+    const media = m.video
+      ? `<video src="${esc(m.url)}" poster="${esc(m.thumb || '')}" controls preload="none"></video>`
+      : `<img src="${esc(m.url)}" loading="lazy" referrerpolicy="no-referrer">`;
+    let hq = '';
+    if (isBetter(m)) {
+      const vn = `${base}_video.mp4`, an = `${base}_audio.m4a`;
+      const q = s => `'${s.replace(/'/g, `'\\''`)}'`;
+      merges.push(`curl -sSL -o ${vn} ${q(m.dash.v.url)}` + (m.dash.a
+        ? ` && curl -sSL -o ${an} ${q(m.dash.a.url)} && ffmpeg -loglevel error -y -i ${vn} -i ${an} -c copy ${base}_HQ.mp4 && rm ${vn} ${an}`
+        : ` && mv ${vn} ${base}_HQ.mp4`) + ` && echo "saved ${base}_HQ.mp4"`);
+      hq = `<br><b style="color:#7ee787">HQ ${m.dash.v.w}×${m.dash.v.h} available</b><br>
+        <a href="#" class="dl" data-kind="hq" data-url="${esc(m.dash.v.url)}" data-name="${esc(vn)}">HQ video</a>` +
+        (m.dash.a ? ` · <a href="#" class="dl" data-kind="hq" data-url="${esc(m.dash.a.url)}" data-name="${esc(an)}">HQ audio</a>` : '');
+    }
+    return `<div class="item" data-hq="${hq ? 1 : 0}">${media}<div class="meta">${m.video ? 'Video' : 'Photo'} ${esc(res)} ${m.user ? '· @' + esc(m.user) : ''}<br><span class="mut">${esc(date)}</span><br>
+      <a href="#" data-url="${esc(m.url)}" data-name="${esc(name)}" data-kind="std" class="dl">Download</a> · <a href="${esc(m.url)}" target="_blank" rel="noreferrer">Open</a>${hq}</div></div>`;
+  }).join('');
+  $('merge').innerHTML = merges.length ? `<p><b>HQ videos (${merges.length}):</b> paste this into a terminal. It downloads the best video + audio for each and merges them losslessly into <code>~/Downloads/*_HQ.mp4</code> (needs <code>curl</code> + <code>ffmpeg</code>). Links expire, so run it soon.</p>
+    <div class="out" id="mergeCmd">${esc('cd ~/Downloads && ' + merges.join(' ; '))}</div><button class="sec" id="copyMerge">Copy command</button>` : '';
+  if (merges.length) $('copyMerge').onclick = () => navigator.clipboard.writeText($('mergeCmd').textContent).then(() => $('copyMerge').textContent = 'Copied');
+}
+
+async function download(a, fallbackOpen = true) {
+  a.textContent = 'Downloading...';
+  try {
+    const r = await fetch(a.dataset.url, { referrerPolicy: 'no-referrer' });
+    if (!r.ok) throw new Error(r.status);
+    const blob = await r.blob();
+    const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: a.dataset.name });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    a.textContent = 'Downloaded';
+    return true;
+  } catch {
+    if (fallbackOpen) window.open(a.dataset.url, '_blank', 'noreferrer');
+    a.textContent = fallbackOpen ? 'Opened (right-click → Save as)' : 'Failed (use Open)';
+    return false;
+  }
+}
+
+$('grid').onclick = e => {
+  const a = e.target.closest('.dl');
+  if (!a) return;
+  e.preventDefault();
+  download(a);
+};
+
+async function downloadAll(filter) {
+  const links = [...$('grid').querySelectorAll('.dl')].filter(a => filter(a, a.closest('.item').dataset.hq === '1'));
+  if (!links.length) { $('status').textContent = 'Nothing to download.'; return; }
+  let ok = 0;
+  for (const [n, a] of links.entries()) {
+    $('status').textContent = `Downloading ${n + 1}/${links.length}...`;
+    if (await download(a, false)) ok++;
+    await new Promise(r => setTimeout(r, 400));
+  }
+  $('status').textContent = `Downloaded ${ok}/${links.length}.` + (ok < links.length ? ' Failed ones: use their Open link.' : '');
+}
+
+$('dlImages').onclick = () => downloadAll(a => a.dataset.name.endsWith('.jpg'));
+$('dlAll').onclick = () => downloadAll(a => a.dataset.kind === 'std');
+$('dlBest').onclick = () => downloadAll((a, hasHq) => !hasHq && a.dataset.kind === 'std');
+
+$('parse').onclick = () => {
+  const blobs = parseInput($('paste').value);
+  const items = blobs.flatMap(collect);
+  const seen = new Set(), uniq = items.filter(m => !seen.has(m.url) && seen.add(m.url));
+  if (!blobs.length) $('status').innerHTML = '<span class="err">Could not find JSON in that text. Use Option B.</span>';
+  else if (!uniq.length) $('status').innerHTML = '<span class="err">JSON parsed but no media found. Are you logged in and following the account? Stories may have expired.</span>';
+  else $('status').textContent = `Found ${uniq.length} item(s). Links expire after a while, so download soon.`;
+  render(uniq);
+};
+
+$('clear').onclick = () => { $('paste').value = ''; $('grid').innerHTML = ''; $('merge').innerHTML = ''; $('status').textContent = ''; };
+</script>
+</body>
+</html>
